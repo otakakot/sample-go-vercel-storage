@@ -24,7 +24,7 @@ func main() {
 
 	body := bytes.NewReader([]byte("test"))
 
-	pathname := uuid.NewString()
+	pathname := uuid.NewString() + ".txt"
 
 	put, err := Put(ctx, pathname, body)
 	if err != nil {
@@ -85,8 +85,6 @@ func Put(
 	req.Header.Set("x-api-version", BLOB_API_VERSION)
 
 	req.Header.Set("Authorization", "Bearer "+token)
-
-	req.Header.Set("Content-Type", "text/plain")
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
