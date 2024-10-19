@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	BlobAPIVersion = "7" // ref: https://github.com/vercel/storage/blob/main/packages/blob/src/api.ts#L82
+	BlobAPIVersion = "7" // ref: https://github.com/vercel/storage/blob/main/packages/blob/src/api.ts const BLOB_API_VERSION
 	DefaultBaseURL = "https://blob.vercel-storage.com"
 )
 
