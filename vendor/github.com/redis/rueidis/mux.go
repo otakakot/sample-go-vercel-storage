@@ -22,27 +22,6 @@ type singleconnect struct {
 	g sync.WaitGroup
 }
 
-type batchcache struct {
-	cIndexes []int
-	commands []CacheableTTL
-}
-
-func (r *batchcache) Capacity() int {
-	return cap(r.commands)
-}
-
-func (r *batchcache) ResetLen(n int) {
-	r.cIndexes = r.cIndexes[:n]
-	r.commands = r.commands[:n]
-}
-
-var batchcachep = util.NewPool(func(capacity int) *batchcache {
-	return &batchcache{
-		cIndexes: make([]int, 0, capacity),
-		commands: make([]CacheableTTL, 0, capacity),
-	}
-})
-
 type conn interface {
 	Do(ctx context.Context, cmd Completed) RedisResult
 	DoCache(ctx context.Context, cmd Cacheable, ttl time.Duration) RedisResult
@@ -77,6 +56,7 @@ type mux struct {
 	sc     []*singleconnect
 	mu     []sync.Mutex
 	maxp   int
+	maxm   int
 }
 
 func makeMux(dst string, option *ClientOption, dialFn dialFn) *mux {
@@ -109,6 +89,7 @@ func newMux(dst string, option *ClientOption, init, dead wire, wireFn wireFn, wi
 		mu:   make([]sync.Mutex, multiplex),
 		sc:   make([]*singleconnect, multiplex),
 		maxp: runtime.GOMAXPROCS(0),
+		maxm: option.BlockingPipeline,
 	}
 	m.clhks.Store(emptyclhks)
 	for i := 0; i < len(m.wire); i++ {
@@ -228,6 +209,9 @@ func (m *mux) Do(ctx context.Context, cmd Completed) (resp RedisResult) {
 }
 
 func (m *mux) DoMulti(ctx context.Context, multi ...Completed) (resp *redisresults) {
+	if len(multi) >= m.maxm && m.maxm > 0 {
+		goto block // use a dedicated connection if the pipeline is too large
+	}
 	for _, cmd := range multi {
 		if cmd.IsBlock() {
 			goto block
@@ -399,53 +383,3 @@ func slotfn(n int, ks uint16, noreply bool) uint16 {
 	}
 	return uint16(util.FastRand(n))
 }
-
-type muxslots struct {
-	s []int
-}
-
-func (r *muxslots) Capacity() int {
-	return cap(r.s)
-}
-
-func (r *muxslots) ResetLen(n int) {
-	r.s = r.s[:n]
-	for i := 0; i < n; i++ {
-		r.s[i] = 0
-	}
-}
-
-func (r *muxslots) LessThen(n int) bool {
-	count := 0
-	for _, value := range r.s {
-		if value > 0 {
-			if count++; count == n {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-var muxslotsp = util.NewPool(func(capacity int) *muxslots {
-	return &muxslots{s: make([]int, 0, capacity)}
-})
-
-type batchcachemap struct {
-	m map[uint16]*batchcache
-	n int
-}
-
-func (r *batchcachemap) Capacity() int {
-	return r.n
-}
-
-func (r *batchcachemap) ResetLen(n int) {
-	for k := range r.m {
-		delete(r.m, k)
-	}
-}
-
-var batchcachemaps = util.NewPool(func(capacity int) *batchcachemap {
-	return &batchcachemap{m: make(map[uint16]*batchcache, capacity), n: capacity}
-})

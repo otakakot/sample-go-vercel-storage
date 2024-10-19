@@ -7,7 +7,6 @@ import (
 	"net"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,56 +18,7 @@ import (
 // ErrNoSlot indicates that there is no redis node owns the key slot.
 var ErrNoSlot = errors.New("the slot has no redis node")
 var ErrReplicaOnlyConflict = errors.New("ReplicaOnly conflicts with SendToReplicas option")
-
-type retry struct {
-	cIndexes []int
-	commands []Completed
-	aIndexes []int
-	cAskings []Completed
-}
-
-func (r *retry) Capacity() int {
-	return cap(r.commands)
-}
-
-func (r *retry) ResetLen(n int) {
-	r.cIndexes = r.cIndexes[:n]
-	r.commands = r.commands[:n]
-	r.aIndexes = r.aIndexes[:0]
-	r.cAskings = r.cAskings[:0]
-}
-
-var retryp = util.NewPool(func(capacity int) *retry {
-	return &retry{
-		cIndexes: make([]int, 0, capacity),
-		commands: make([]Completed, 0, capacity),
-	}
-})
-
-type retrycache struct {
-	cIndexes []int
-	commands []CacheableTTL
-	aIndexes []int
-	cAskings []CacheableTTL
-}
-
-func (r *retrycache) Capacity() int {
-	return cap(r.commands)
-}
-
-func (r *retrycache) ResetLen(n int) {
-	r.cIndexes = r.cIndexes[:n]
-	r.commands = r.commands[:n]
-	r.aIndexes = r.aIndexes[:0]
-	r.cAskings = r.cAskings[:0]
-}
-
-var retrycachep = util.NewPool(func(capacity int) *retrycache {
-	return &retrycache{
-		cIndexes: make([]int, 0, capacity),
-		commands: make([]CacheableTTL, 0, capacity),
-	}
-})
+var ErrInvalidShardsRefreshInterval = errors.New("ShardsRefreshInterval must be greater than or equal to 0")
 
 type clusterClient struct {
 	pslots [16384]conn
@@ -82,7 +32,7 @@ type clusterClient struct {
 	stop   uint32
 	cmd    Builder
 	retry  bool
-	aws    bool
+	stopCh chan struct{}
 }
 
 // NOTE: connrole and conn must be initialized at the same time
@@ -98,7 +48,7 @@ func newClusterClient(opt *ClientOption, connFn connFn) (*clusterClient, error) 
 		opt:    opt,
 		conns:  make(map[string]connrole),
 		retry:  !opt.DisableRetry,
-		aws:    len(opt.InitAddress) == 1 && strings.Contains(opt.InitAddress[0], "amazonaws.com"),
+		stopCh: make(chan struct{}),
 	}
 
 	if opt.ReplicaOnly && opt.SendToReplicas != nil {
@@ -125,6 +75,12 @@ func newClusterClient(opt *ClientOption, connFn connFn) (*clusterClient, error) 
 
 	if err := client.refresh(context.Background()); err != nil {
 		return client, err
+	}
+
+	if opt.ClusterOption.ShardsRefreshInterval > 0 {
+		go client.runClusterTopologyRefreshment()
+	} else if opt.ClusterOption.ShardsRefreshInterval < 0 {
+		return nil, ErrInvalidShardsRefreshInterval
 	}
 
 	return client, nil
@@ -186,24 +142,22 @@ func (s clusterslots) parse(tls bool) map[string]group {
 	return parseShards(s.reply.val, s.addr, tls)
 }
 
-func getClusterSlots(c conn) clusterslots {
+func getClusterSlots(c conn, timeout time.Duration) clusterslots {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	v := c.Version()
 	if v < 7 {
-		return clusterslots{reply: c.Do(context.Background(), cmds.SlotCmd), addr: c.Addr(), ver: v}
+		return clusterslots{reply: c.Do(ctx, cmds.SlotCmd), addr: c.Addr(), ver: v}
 	}
-	return clusterslots{reply: c.Do(context.Background(), cmds.ShardsCmd), addr: c.Addr(), ver: v}
+	return clusterslots{reply: c.Do(ctx, cmds.ShardsCmd), addr: c.Addr(), ver: v}
 }
 
 func (c *clusterClient) _refresh() (err error) {
 	c.mu.RLock()
 	results := make(chan clusterslots, len(c.conns))
 	pending := make([]conn, 0, len(c.conns))
-	if c.aws {
-		pending = append(pending, c.conns[c.opt.InitAddress[0]].conn)
-	} else {
-		for _, cc := range c.conns {
-			pending = append(pending, cc.conn)
-		}
+	for _, cc := range c.conns {
+		pending = append(pending, cc.conn)
 	}
 	c.mu.RUnlock()
 
@@ -211,9 +165,9 @@ func (c *clusterClient) _refresh() (err error) {
 	for i := 0; i < cap(results); i++ {
 		if i&3 == 0 { // batch CLUSTER SLOTS/CLUSTER SHARDS for every 4 connections
 			for j := i; j < i+4 && j < len(pending); j++ {
-				go func(c conn) {
-					results <- getClusterSlots(c)
-				}(pending[j])
+				go func(c conn, timeout time.Duration) {
+					results <- getClusterSlots(c, timeout)
+				}(pending[j], c.opt.ConnWriteTimeout)
 			}
 		}
 		result = <-results
@@ -413,6 +367,19 @@ func parseShards(shards RedisMessage, defaultAddr string, tls bool) map[string]g
 	return groups
 }
 
+func (c *clusterClient) runClusterTopologyRefreshment() {
+	ticker := time.NewTicker(c.opt.ClusterOption.ShardsRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			c.lazyRefresh()
+		}
+	}
+}
+
 func (c *clusterClient) _pick(slot uint16, toReplica bool) (p conn) {
 	c.mu.RLock()
 	if slot == cmds.InitSlot {
@@ -444,7 +411,7 @@ func (c *clusterClient) pick(ctx context.Context, slot uint16, toReplica bool) (
 	return p, nil
 }
 
-func (c *clusterClient) redirectOrNew(addr string, prev conn) (p conn) {
+func (c *clusterClient) redirectOrNew(addr string, prev conn, slot uint16, mode RedirectMode) conn {
 	c.mu.RLock()
 	cc := c.conns[addr]
 	c.mu.RUnlock()
@@ -452,10 +419,13 @@ func (c *clusterClient) redirectOrNew(addr string, prev conn) (p conn) {
 		return cc.conn
 	}
 	c.mu.Lock()
-
 	if cc = c.conns[addr]; cc.conn == nil {
-		p = c.connFn(addr, c.opt)
-		c.conns[addr] = connrole{conn: p, replica: false}
+		p := c.connFn(addr, c.opt)
+		cc = connrole{conn: p, replica: false}
+		c.conns[addr] = cc
+		if mode == RedirectMove {
+			c.pslots[slot] = p
+		}
 	} else if prev == cc.conn {
 		// try reconnection if the MOVED redirects to the same host,
 		// because the same hostname may actually be resolved into another destination
@@ -464,11 +434,19 @@ func (c *clusterClient) redirectOrNew(addr string, prev conn) (p conn) {
 			time.Sleep(time.Second * 5)
 			prev.Close()
 		}(prev)
-		p = c.connFn(addr, c.opt)
-		c.conns[addr] = connrole{conn: p, replica: cc.replica}
+		p := c.connFn(addr, c.opt)
+		cc = connrole{conn: p, replica: cc.replica}
+		c.conns[addr] = cc
+		if mode == RedirectMove {
+			if cc.replica {
+				c.rslots[slot] = p
+			} else {
+				c.pslots[slot] = p
+			}
+		}
 	}
 	c.mu.Unlock()
-	return p
+	return cc.conn
 }
 
 func (c *clusterClient) B() Builder {
@@ -492,10 +470,10 @@ retry:
 process:
 	switch addr, mode := c.shouldRefreshRetry(resp.Error(), ctx); mode {
 	case RedirectMove:
-		resp = c.redirectOrNew(addr, cc).Do(ctx, cmd)
+		resp = c.redirectOrNew(addr, cc, cmd.Slot(), mode).Do(ctx, cmd)
 		goto process
 	case RedirectAsk:
-		results := c.redirectOrNew(addr, cc).DoMulti(ctx, cmds.AskingCmd, cmd)
+		results := c.redirectOrNew(addr, cc, cmd.Slot(), mode).DoMulti(ctx, cmds.AskingCmd, cmd)
 		resp = results.s[1]
 		resultsp.Put(results)
 		goto process
@@ -628,7 +606,7 @@ func (c *clusterClient) doresultfn(ctx context.Context, results *redisresults, r
 					continue
 				}
 			} else {
-				nc = c.redirectOrNew(addr, cc)
+				nc = c.redirectOrNew(addr, cc, cm.Slot(), mode)
 			}
 			mu.Lock()
 			nr := retries.m[nc]
@@ -726,18 +704,18 @@ retry:
 	}
 	resps := cc.DoMulti(ctx, multi...)
 process:
-	for _, resp := range resps.s {
+	for i, resp := range resps.s {
 		switch addr, mode := c.shouldRefreshRetry(resp.Error(), ctx); mode {
 		case RedirectMove:
 			if c.retry && allReadOnly(multi) {
 				resultsp.Put(resps)
-				resps = c.redirectOrNew(addr, cc).DoMulti(ctx, multi...)
+				resps = c.redirectOrNew(addr, cc, multi[i].Slot(), mode).DoMulti(ctx, multi...)
 				goto process
 			}
 		case RedirectAsk:
 			if c.retry && allReadOnly(multi) {
 				resultsp.Put(resps)
-				resps = askingMulti(c.redirectOrNew(addr, cc), ctx, multi)
+				resps = askingMulti(c.redirectOrNew(addr, cc, multi[i].Slot(), mode), ctx, multi)
 				goto process
 			}
 		case RedirectRetry:
@@ -761,10 +739,10 @@ retry:
 process:
 	switch addr, mode := c.shouldRefreshRetry(resp.Error(), ctx); mode {
 	case RedirectMove:
-		resp = c.redirectOrNew(addr, cc).DoCache(ctx, cmd, ttl)
+		resp = c.redirectOrNew(addr, cc, cmd.Slot(), mode).DoCache(ctx, cmd, ttl)
 		goto process
 	case RedirectAsk:
-		results := askingMultiCache(c.redirectOrNew(addr, cc), ctx, []CacheableTTL{CT(cmd, ttl)})
+		results := askingMultiCache(c.redirectOrNew(addr, cc, cmd.Slot(), mode), ctx, []CacheableTTL{CT(cmd, ttl)})
 		resp = results.s[0]
 		resultsp.Put(results)
 		goto process
@@ -908,7 +886,7 @@ func (c *clusterClient) resultcachefn(ctx context.Context, results *redisresults
 					continue
 				}
 			} else {
-				nc = c.redirectOrNew(addr, cc)
+				nc = c.redirectOrNew(addr, cc, cm.Cmd.Slot(), mode)
 			}
 			mu.Lock()
 			nr := retries.m[nc]
@@ -1062,7 +1040,10 @@ func (c *clusterClient) Nodes() map[string]Client {
 }
 
 func (c *clusterClient) Close() {
-	atomic.StoreUint32(&c.stop, 1)
+	if atomic.CompareAndSwapUint32(&c.stop, 0, 1) {
+		close(c.stopCh)
+	}
+
 	c.mu.RLock()
 	for _, cc := range c.conns {
 		go cc.conn.Close()
@@ -1107,7 +1088,7 @@ func (c *dedicatedClusterClient) acquire(ctx context.Context, slot uint16) (wire
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mark {
-		panic(dedicatedClientUsedAfterReleased)
+		return nil, ErrDedicatedClientRecycled
 	}
 	if c.slot == cmds.NoSlot {
 		c.slot = slot
@@ -1237,7 +1218,9 @@ func (c *dedicatedClusterClient) SetPubSubHooks(hooks PubSubHooks) <-chan error 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mark {
-		panic(dedicatedClientUsedAfterReleased)
+		ch := make(chan error, 1)
+		ch <- ErrDedicatedClientRecycled
+		return ch
 	}
 	if p := c.pshks; p != nil {
 		c.pshks = nil
@@ -1279,60 +1262,3 @@ const (
 	panicMsgCxSlot = "cross slot command in Dedicated is prohibited"
 	panicMixCxSlot = "Mixing no-slot and cross slot commands in DoMulti is prohibited"
 )
-
-type conncount struct {
-	m map[conn]int
-	n int
-}
-
-func (r *conncount) Capacity() int {
-	return r.n
-}
-
-func (r *conncount) ResetLen(n int) {
-	for k := range r.m {
-		delete(r.m, k)
-	}
-}
-
-var conncountp = util.NewPool(func(capacity int) *conncount {
-	return &conncount{m: make(map[conn]int, capacity), n: capacity}
-})
-
-type connretry struct {
-	m map[conn]*retry
-	n int
-}
-
-func (r *connretry) Capacity() int {
-	return r.n
-}
-
-func (r *connretry) ResetLen(n int) {
-	for k := range r.m {
-		delete(r.m, k)
-	}
-}
-
-var connretryp = util.NewPool(func(capacity int) *connretry {
-	return &connretry{m: make(map[conn]*retry, capacity), n: capacity}
-})
-
-type connretrycache struct {
-	m map[conn]*retrycache
-	n int
-}
-
-func (r *connretrycache) Capacity() int {
-	return r.n
-}
-
-func (r *connretrycache) ResetLen(n int) {
-	for k := range r.m {
-		delete(r.m, k)
-	}
-}
-
-var connretrycachep = util.NewPool(func(capacity int) *connretrycache {
-	return &connretrycache{m: make(map[conn]*retrycache, capacity), n: capacity}
-})

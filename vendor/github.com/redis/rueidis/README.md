@@ -226,14 +226,14 @@ To receive messages from channels, `client.Receive()` should be used. It support
 
 ```golang
 err = client.Receive(context.Background(), client.B().Subscribe().Channel("ch1", "ch2").Build(), func(msg rueidis.PubSubMessage) {
-    // handle the msg
+    // Handle the message. Note that if you want to call another `client.Do()` here, you need to do it in another goroutine or the `client` will be blocked.
 })
 ```
 
 The provided handler will be called with the received message.
 
 It is important to note that `client.Receive()` will keep blocking until returning a value in the following cases:
-1. return `nil` when receiving any unsubscribe/punsubscribe message related to the provided `subscribe` command.
+1. return `nil` when receiving any unsubscribe/punsubscribe message related to the provided `subscribe` command, including `sunsubscribe` messages caused by slot migrations.
 2. return `rueidis.ErrClosing` when the client is closed manually.
 3. return `ctx.Err()` when the `ctx` is done.
 4. return non-nil `err` when the provided `subscribe` command fails.
@@ -253,7 +253,7 @@ defer cancel()
 
 wait := c.SetPubSubHooks(rueidis.PubSubHooks{
 	OnMessage: func(m rueidis.PubSubMessage) {
-		// Handle message. This callback will be called sequentially but in another goroutine.
+		// Handle the message. Note that if you want to call another `c.Do()` here, you need to do it in another goroutine or the `c` will be blocked.
 	}
 })
 c.Do(ctx, c.B().Subscribe().Channel("ch").Build())
