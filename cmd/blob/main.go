@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	BLOB_API_VERSION = "7" // ref: https://github.com/vercel/storage/blob/main/packages/blob/src/api.ts#L82
-	DEFAULT_BASE_URL = "https://blob.vercel-storage.com"
+	BlobAPIVersion = "7" // ref: https://github.com/vercel/storage/blob/main/packages/blob/src/api.ts#L82
+	DefaultBaseURL = "https://blob.vercel-storage.com"
 )
 
 func main() {
@@ -73,7 +73,7 @@ func Put(
 		return nil, fmt.Errorf("BLOB_READ_WRITE_TOKEN is required")
 	}
 
-	base, _ := url.Parse(DEFAULT_BASE_URL)
+	base, _ := url.Parse(DefaultBaseURL)
 
 	base.Path = pathname
 
@@ -82,7 +82,7 @@ func Put(
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("x-api-version", BLOB_API_VERSION)
+	req.Header.Set("x-api-version", BlobAPIVersion)
 
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -130,12 +130,12 @@ func Head(
 		return nil, fmt.Errorf("BLOB_READ_WRITE_TOKEN is required")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DEFAULT_BASE_URL+"?"+url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DefaultBaseURL+"?"+url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("x-api-version", BLOB_API_VERSION)
+	req.Header.Set("x-api-version", BlobAPIVersion)
 
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -175,7 +175,7 @@ func Download(
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("x-api-version", BLOB_API_VERSION)
+	req.Header.Set("x-api-version", BlobAPIVersion)
 
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -218,12 +218,12 @@ func Del(
 		return fmt.Errorf("failed to encode request body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, DEFAULT_BASE_URL+"/delete", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, DefaultBaseURL+"/delete", &buf)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("x-api-version", BLOB_API_VERSION)
+	req.Header.Set("x-api-version", BlobAPIVersion)
 
 	req.Header.Set("Authorization", "Bearer "+token)
 
