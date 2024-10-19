@@ -23,6 +23,8 @@ const (
 	DefaultRingScale = 10
 	// DefaultPoolSize is the default value of ClientOption.BlockingPoolSize
 	DefaultPoolSize = 1000
+	// DefaultBlockingPipeline is the default value of ClientOption.BlockingPipeline
+	DefaultBlockingPipeline = 2000
 	// DefaultDialTimeout is the default value of ClientOption.Dialer.Timeout
 	DefaultDialTimeout = 5 * time.Second
 	// DefaultTCPKeepAlive is the default value of ClientOption.Dialer.KeepAlive
@@ -51,6 +53,10 @@ var (
 	ErrReplicaOnlyNotSupported = errors.New("ReplicaOnly is not supported for single client")
 	// ErrWrongPipelineMultiplex means wrong value for ClientOption.PipelineMultiplex
 	ErrWrongPipelineMultiplex = errors.New("ClientOption.PipelineMultiplex must not be bigger than MaxPipelineMultiplex")
+	// ErrDedicatedClientRecycled means the caller attempted to use the dedicated client which has been already recycled (after canceled/closed).
+	ErrDedicatedClientRecycled = errors.New("dedicated client should not be used after recycled")
+	// DisableClientSetInfo is the value that can be used for ClientOption.ClientSetInfo to disable making the CLIENT SETINFO command
+	DisableClientSetInfo = make([]string, 0)
 )
 
 // ClientOption should be passed to NewClient to construct a Client
@@ -128,6 +134,8 @@ type ClientOption struct {
 	// BlockingPoolSize is the size of the connection pool shared by blocking commands (ex BLPOP, XREAD with BLOCK).
 	// The default is DefaultPoolSize.
 	BlockingPoolSize int
+	// BlockingPipeline is the threshold of a pipeline that will be treated as blocking commands when exceeding it.
+	BlockingPipeline int
 
 	// PipelineMultiplex determines how many tcp connections used to pipeline commands to one redis instance.
 	// The default for single and sentinel clients is 2, which means 4 connections (2^2).
@@ -175,6 +183,9 @@ type ClientOption struct {
 	// the current connection will be excluded from the client eviction process
 	// even if we're above the configured client eviction threshold.
 	ClientNoEvict bool
+
+	// ClusterOption is the options for the redis cluster client.
+	ClusterOption ClusterOption
 }
 
 // SentinelOption contains MasterSet,
@@ -191,6 +202,14 @@ type SentinelOption struct {
 	Username   string
 	Password   string
 	ClientName string
+}
+
+// ClusterOption is the options for the redis cluster client.
+type ClusterOption struct {
+	// ShardsRefreshInterval is the interval to scan the cluster topology.
+	// If the value is zero, refreshment will be disabled.
+	// Cluster topology cache refresh happens always in the background after successful scan.
+	ShardsRefreshInterval time.Duration
 }
 
 // Client is the redis client interface for both single redis instance and redis cluster. It should be created from the NewClient()
@@ -332,6 +351,9 @@ func NewClient(option ClientOption) (client Client, err error) {
 	if option.ConnWriteTimeout == 0 {
 		option.ConnWriteTimeout = option.Dialer.KeepAlive * 10
 	}
+	if option.BlockingPipeline == 0 {
+		option.BlockingPipeline = DefaultBlockingPipeline
+	}
 	if option.ShuffleInit {
 		util.Shuffle(len(option.InitAddress), func(i, j int) {
 			option.InitAddress[i], option.InitAddress[j] = option.InitAddress[j], option.InitAddress[i]
@@ -392,4 +414,3 @@ func dial(dst string, opt *ClientOption) (conn net.Conn, err error) {
 }
 
 const redisErrMsgCommandNotAllow = "command is not allowed"
-const dedicatedClientUsedAfterReleased = "DedicatedClient should not be used after recycled"
