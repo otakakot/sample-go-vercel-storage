@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	BlobAPIVersion = "7" // ref: https://github.com/vercel/storage/blob/main/packages/blob/src/api.ts const BLOB_API_VERSION
+	BlobAPIVersion = "7"
 	DefaultBaseURL = "https://blob.vercel-storage.com"
 )
 
@@ -77,7 +77,12 @@ func Put(
 
 	base.Path = pathname
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base.String(), body)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPut,
+		base.String(),
+		body,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -130,7 +135,12 @@ func Head(
 		return nil, fmt.Errorf("BLOB_READ_WRITE_TOKEN is required")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DefaultBaseURL+"?"+url, nil)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		DefaultBaseURL+"?"+url,
+		nil,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -218,7 +228,12 @@ func Del(
 		return fmt.Errorf("encode request body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, DefaultBaseURL+"/delete", &buf)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		DefaultBaseURL+"/delete",
+		&buf,
+	)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
