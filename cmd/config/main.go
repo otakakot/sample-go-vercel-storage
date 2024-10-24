@@ -42,7 +42,12 @@ func Get(
 		return "", fmt.Errorf("EDGE_CONFIG_TOKEN is required")
 	}
 
-	req, err := http.NewRequest(http.MethodGet, DefaultBaseURL+"/"+id+"/item/"+key+"?token="+token, nil)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		DefaultBaseURL+"/"+id+"/item/"+key+"?token="+token,
+		nil,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +89,12 @@ func GetAll(
 		return nil, fmt.Errorf("EDGE_CONFIG_TOKEN is required")
 	}
 
-	req, err := http.NewRequest(http.MethodGet, DefaultBaseURL+"/"+id+"/items?token="+token, nil)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		DefaultBaseURL+"/"+id+"/items?token="+token,
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -79,7 +79,7 @@ func Put(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base.String(), body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("x-api-version", BlobAPIVersion)
@@ -88,7 +88,7 @@ func Put(
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, fmt.Errorf("send request: %w", err)
 	}
 
 	defer func() {
@@ -102,7 +102,7 @@ func Put(
 	var putRes PutResponse
 
 	if err := json.NewDecoder(res.Body).Decode(&putRes); err != nil {
-		return nil, fmt.Errorf("failed to decode response body: %w", err)
+		return nil, fmt.Errorf("decode response body: %w", err)
 	}
 
 	return &putRes, nil
@@ -132,7 +132,7 @@ func Head(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, DefaultBaseURL+"?"+url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("x-api-version", BlobAPIVersion)
@@ -141,7 +141,7 @@ func Head(
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, fmt.Errorf("send request: %w", err)
 	}
 
 	defer func() {
@@ -155,7 +155,7 @@ func Head(
 	var headRes HeadResponse
 
 	if err := json.NewDecoder(res.Body).Decode(&headRes); err != nil {
-		return nil, fmt.Errorf("failed to decode response body: %w", err)
+		return nil, fmt.Errorf("decode response body: %w", err)
 	}
 
 	return &headRes, nil
@@ -172,7 +172,7 @@ func Download(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("x-api-version", BlobAPIVersion)
@@ -181,7 +181,7 @@ func Download(
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, fmt.Errorf("send request: %w", err)
 	}
 
 	defer func() {
@@ -215,12 +215,12 @@ func Del(
 	buf := bytes.Buffer{}
 
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {
-		return fmt.Errorf("failed to encode request body: %w", err)
+		return fmt.Errorf("encode request body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, DefaultBaseURL+"/delete", &buf)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("x-api-version", BlobAPIVersion)
@@ -231,7 +231,7 @@ func Del(
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return fmt.Errorf("send request: %w", err)
 	}
 
 	defer func() {
