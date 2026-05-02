@@ -10,7 +10,6 @@ help: ## display this help screen
 update: ## go modules update
 	@go get -u -t ./...
 	@go mod tidy
-	@go mod vendor
 
 .PHONY: goredis
 goredis: ## run the goredis demo
